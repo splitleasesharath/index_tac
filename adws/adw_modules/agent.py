@@ -79,13 +79,17 @@ def get_safe_subprocess_env() -> Dict[str, str]:
     safe_env_vars = {
         # Anthropic Configuration (required)
         "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
-        
+
+        # GitHub Configuration (required for ADW)
+        "GITHUB_REPO_URL": os.getenv("GITHUB_REPO_URL"),
+        "GITHUB_PAT": os.getenv("GITHUB_PAT"),
+
         # Claude Code Configuration
         "CLAUDE_CODE_PATH": os.getenv("CLAUDE_CODE_PATH", "claude"),
         "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": os.getenv(
             "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "true"
         ),
-        
+
         # Essential system environment variables
         "HOME": os.getenv("HOME"),
         "USER": os.getenv("USER"),
@@ -94,11 +98,11 @@ def get_safe_subprocess_env() -> Dict[str, str]:
         "TERM": os.getenv("TERM"),
         "LANG": os.getenv("LANG"),
         "LC_ALL": os.getenv("LC_ALL"),
-        
+
         # Python-specific variables that subprocesses might need
         "PYTHONPATH": os.getenv("PYTHONPATH"),
         "PYTHONUNBUFFERED": "1",  # Useful for subprocess output
-        
+
         # Working directory tracking
         "PWD": os.getcwd(),
     }
