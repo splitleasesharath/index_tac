@@ -16,10 +16,12 @@ else
     echo "⚠️  Warning: .env file not found, using defaults"
 fi
 
-# Check for required environment variable
+# Check authentication mode (max branch: API key is optional)
 if [ -z "$ANTHROPIC_API_KEY" ]; then
-    echo "❌ Error: ANTHROPIC_API_KEY not set in .env"
-    exit 1
+    echo "ℹ️  ANTHROPIC_API_KEY not set - using authenticated Claude Code (Max Plan)"
+    echo "ℹ️  If you see authentication errors, set ANTHROPIC_API_KEY in .env"
+else
+    echo "ℹ️  Using ANTHROPIC_API_KEY for authentication"
 fi
 
 # Start the webhook server
