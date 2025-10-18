@@ -24,6 +24,11 @@ import tempfile
 from pathlib import Path
 
 
+# Claude Code CLI path - update this if needed
+# Found via: where claude (Windows) or which claude (Mac/Linux)
+CLAUDE_PATH = r"C:\Users\igor\AppData\Roaming\npm\claude.cmd"
+
+
 def print_header(text: str):
     """Print a formatted header."""
     print(f"\n{'='*60}")
@@ -52,7 +57,7 @@ def check_claude_installed():
 
     try:
         result = subprocess.run(
-            ["claude", "--version"],
+            [CLAUDE_PATH, "--version"],
             capture_output=True,
             text=True,
             timeout=5
@@ -108,7 +113,7 @@ def test_claude_simple_prompt():
 
         # Run Claude Code with simple prompt
         cmd = [
-            "claude",
+            CLAUDE_PATH,
             "-p",
             "What is 2+2? Reply only with the number.",
             "--output-format",
