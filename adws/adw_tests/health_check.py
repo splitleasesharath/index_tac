@@ -64,13 +64,17 @@ class HealthCheckResult(BaseModel):
 
 
 def check_env_vars() -> CheckResult:
-    """Check required environment variables."""
+    """Check required environment variables.
+
+    Note: On 'max' branch, ANTHROPIC_API_KEY is optional since we use
+    authenticated Claude Code (Claude Max Plan).
+    """
     required_vars = {
-        "ANTHROPIC_API_KEY": "Anthropic API Key for Claude Code",
         "CLAUDE_CODE_PATH": "Path to Claude Code CLI (defaults to 'claude')",
     }
 
     optional_vars = {
+        "ANTHROPIC_API_KEY": "(Optional) Anthropic API Key - not needed if using authenticated Claude Code",
         "GITHUB_PAT": "(Optional) GitHub Personal Access Token - only needed if you want ADW to use a different GitHub account than 'gh auth login'",
         "E2B_API_KEY": "(Optional) E2B API Key for sandbox environments",
         "CLOUDFLARED_TUNNEL_TOKEN": "(Optional) Cloudflare tunnel token for webhook exposure",
@@ -165,30 +169,27 @@ def check_claude_code() -> CheckResult:
             error="Claude Code version check timed out",
         )
 
-    # Check if ANTHROPIC_API_KEY is set
+    # Check if ANTHROPIC_API_KEY is set (optional on 'max' branch)
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
+    auth_mode = "API Key" if api_key else "Authenticated Claude Code (Max Plan)"
+
+    if api_key and not api_key.startswith("sk-ant-"):
         return CheckResult(
-            success=False,
-            error="ANTHROPIC_API_KEY not set in environment",
-            details={"version": version},
+            success=True,
+            warning="ANTHROPIC_API_KEY may be invalid (should start with 'sk-ant-'), but using authenticated mode as fallback",
+            details={
+                "version": version,
+                "authentication_mode": auth_mode,
+            },
         )
 
-    # Validate API key format (should start with sk-ant-)
-    if not api_key.startswith("sk-ant-"):
-        return CheckResult(
-            success=False,
-            warning="ANTHROPIC_API_KEY may be invalid (should start with 'sk-ant-')",
-            details={"version": version, "api_key_format": "invalid"},
-        )
-
-    # All checks passed - Claude Code is ready
+    # All checks passed - Claude Code is ready (with or without API key)
     return CheckResult(
         success=True,
         details={
             "version": version,
-            "api_key_configured": True,
-            "note": "API connectivity will be tested when you run your first agent",
+            "authentication_mode": auth_mode,
+            "note": "Using authenticated Claude Code - no API key required on 'max' branch",
         },
     )
 

@@ -70,14 +70,15 @@ class ClaudeCodeResultMessage(BaseModel):
 
 def get_safe_subprocess_env() -> Dict[str, str]:
     """Get filtered environment variables safe for subprocess execution.
-    
+
     Returns only the environment variables needed based on .env.sample configuration.
-    
+    This 'max' branch uses authenticated Claude Code - no API key required.
+
     Returns:
         Dictionary containing only required environment variables
     """
     safe_env_vars = {
-        # Anthropic Configuration (required)
+        # Anthropic Configuration (optional - uses authenticated Claude Code on max branch)
         "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
 
         # GitHub Configuration (required for ADW)
@@ -93,11 +94,17 @@ def get_safe_subprocess_env() -> Dict[str, str]:
         # Essential system environment variables
         "HOME": os.getenv("HOME"),
         "USER": os.getenv("USER"),
+        "USERNAME": os.getenv("USERNAME"),  # Windows username
         "PATH": os.getenv("PATH"),
         "SHELL": os.getenv("SHELL"),
         "TERM": os.getenv("TERM"),
         "LANG": os.getenv("LANG"),
         "LC_ALL": os.getenv("LC_ALL"),
+
+        # Windows-specific (needed for Claude Code authentication)
+        "USERPROFILE": os.getenv("USERPROFILE"),  # Windows user profile path
+        "APPDATA": os.getenv("APPDATA"),  # Application data folder
+        "LOCALAPPDATA": os.getenv("LOCALAPPDATA"),  # Local application data
 
         # Python-specific variables that subprocesses might need
         "PYTHONPATH": os.getenv("PYTHONPATH"),
@@ -106,8 +113,8 @@ def get_safe_subprocess_env() -> Dict[str, str]:
         # Working directory tracking
         "PWD": os.getcwd(),
     }
-    
-    # Filter out None values
+
+    # Filter out None values (allows optional variables)
     return {k: v for k, v in safe_env_vars.items() if v is not None}
 
 
