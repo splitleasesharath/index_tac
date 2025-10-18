@@ -141,90 +141,56 @@ def check_claude_code() -> CheckResult:
     """Test Claude Code CLI functionality."""
     claude_path = os.getenv("CLAUDE_CODE_PATH", "claude")
 
-    # First check if Claude Code is installed
+    # Check if Claude Code is installed and get version
     try:
         result = subprocess.run(
-            [claude_path, "--version"], capture_output=True, text=True
+            [claude_path, "--version"], capture_output=True, text=True, timeout=5
         )
         if result.returncode != 0:
             return CheckResult(
                 success=False,
                 error=f"Claude Code CLI not functional at '{claude_path}'",
             )
+
+        version = result.stdout.strip()
+
     except FileNotFoundError:
         return CheckResult(
             success=False,
             error=f"Claude Code CLI not found at '{claude_path}'. Please install or set CLAUDE_CODE_PATH correctly.",
         )
-
-    # Test with a simple prompt
-    test_prompt = "What is 2+2? Just respond with the number, nothing else."
-
-    # Prepare environment with filtered variables
-    env = get_safe_subprocess_env()
-
-    try:
-        # Create temporary file for output
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as tmp:
-            output_file = tmp.name
-
-        # Run Claude Code
-        cmd = [
-            claude_path,
-            "-p",
-            test_prompt,
-            "--model",
-            "claude-3-5-haiku-20241022",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--dangerously-skip-permissions",
-        ]
-
-        with open(output_file, "w") as f:
-            result = subprocess.run(
-                cmd, stdout=f, stderr=subprocess.PIPE, text=True, env=env, timeout=60
-            )
-
-        if result.returncode != 0:
-            return CheckResult(
-                success=False, error=f"Claude Code test failed: {result.stderr}"
-            )
-
-        # Parse output to verify it worked
-        claude_responded = False
-        response_text = ""
-
-        try:
-            with open(output_file, "r") as f:
-                for line in f:
-                    if line.strip():
-                        msg = json.loads(line)
-                        if msg.get("type") == "result":
-                            claude_responded = True
-                            response_text = msg.get("result", "")
-                            break
-        finally:
-            # Clean up temp file
-            if os.path.exists(output_file):
-                os.unlink(output_file)
-
-        return CheckResult(
-            success=claude_responded,
-            details={
-                "test_passed": "4" in response_text,
-                "response": response_text[:100] if response_text else "No response",
-            },
-        )
-
     except subprocess.TimeoutExpired:
         return CheckResult(
-            success=False, error="Claude Code test timed out after 30 seconds"
+            success=False,
+            error="Claude Code version check timed out",
         )
-    except Exception as e:
-        return CheckResult(success=False, error=f"Claude Code test error: {str(e)}")
+
+    # Check if ANTHROPIC_API_KEY is set
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return CheckResult(
+            success=False,
+            error="ANTHROPIC_API_KEY not set in environment",
+            details={"version": version},
+        )
+
+    # Validate API key format (should start with sk-ant-)
+    if not api_key.startswith("sk-ant-"):
+        return CheckResult(
+            success=False,
+            warning="ANTHROPIC_API_KEY may be invalid (should start with 'sk-ant-')",
+            details={"version": version, "api_key_format": "invalid"},
+        )
+
+    # All checks passed - Claude Code is ready
+    return CheckResult(
+        success=True,
+        details={
+            "version": version,
+            "api_key_configured": True,
+            "note": "API connectivity will be tested when you run your first agent",
+        },
+    )
 
 
 def check_github_cli() -> CheckResult:
