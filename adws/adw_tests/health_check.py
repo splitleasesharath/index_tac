@@ -185,7 +185,7 @@ def check_claude_code() -> CheckResult:
 
         with open(output_file, "w") as f:
             result = subprocess.run(
-                cmd, stdout=f, stderr=subprocess.PIPE, text=True, env=env, timeout=30
+                cmd, stdout=f, stderr=subprocess.PIPE, text=True, env=env, timeout=60
             )
 
         if result.returncode != 0:
@@ -235,11 +235,10 @@ def check_github_cli() -> CheckResult:
         if result.returncode != 0:
             return CheckResult(success=False, error="GitHub CLI (gh) is not installed")
 
-        # Check authentication status with filtered environment
-        env = get_safe_subprocess_env()
-
+        # Check authentication status - don't use filtered env for gh auth
+        # gh needs access to system keyring/credential manager on Windows
         result = subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, text=True, env=env
+            ["gh", "auth", "status"], capture_output=True, text=True
         )
 
         authenticated = result.returncode == 0
