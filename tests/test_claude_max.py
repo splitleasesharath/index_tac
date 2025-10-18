@@ -118,6 +118,7 @@ def test_claude_simple_prompt():
             "What is 2+2? Reply only with the number.",
             "--output-format",
             "stream-json",
+            "--verbose",
             "--dangerously-skip-permissions"
         ]
 
