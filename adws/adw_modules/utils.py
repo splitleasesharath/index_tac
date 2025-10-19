@@ -237,49 +237,33 @@ def format_worktree_status(action: str, worktree: str, adw_id: str = None) -> st
 
 
 def get_safe_subprocess_env() -> Dict[str, str]:
-    """Get filtered environment variables safe for subprocess execution.
+    """Get environment variables for subprocess execution.
 
-    Returns only the environment variables needed for ADW workflows based on
-    .env.sample configuration. This prevents accidental exposure of sensitive
-    credentials to subprocesses.
+    For Max Plan (authenticated Claude Code), we need to pass ALL environment
+    variables so Claude Code can find its authentication credentials.
+
+    This is required for Windows authentication which uses various system paths
+    and credentials that aren't predictable.
 
     Returns:
-        Dictionary containing only required environment variables
+        Dictionary containing all environment variables
     """
-    safe_env_vars = {
-        # Anthropic Configuration (required)
-        "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
-        # GitHub Configuration (optional)
-        # GITHUB_PAT is optional - if not set, will use default gh auth
-        "GITHUB_PAT": os.getenv("GITHUB_PAT"),
-        # Claude Code Configuration
-        "CLAUDE_CODE_PATH": os.getenv("CLAUDE_CODE_PATH", "claude"),
-        "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": os.getenv(
-            "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "true"
-        ),
-        # Agent Cloud Sandbox Environment (optional)
-        "E2B_API_KEY": os.getenv("E2B_API_KEY"),
-        # Cloudflare tunnel token (optional)
-        "CLOUDFLARED_TUNNEL_TOKEN": os.getenv("CLOUDFLARED_TUNNEL_TOKEN"),
-        # Essential system environment variables
-        "HOME": os.getenv("HOME"),
-        "USER": os.getenv("USER"),
-        "PATH": os.getenv("PATH"),
-        "SHELL": os.getenv("SHELL"),
-        "TERM": os.getenv("TERM"),
-        "LANG": os.getenv("LANG"),
-        "LC_ALL": os.getenv("LC_ALL"),
-        # Python-specific variables that subprocesses might need
-        "PYTHONPATH": os.getenv("PYTHONPATH"),
-        "PYTHONUNBUFFERED": "1",  # Useful for subprocess output
-        # Working directory tracking
-        "PWD": os.getcwd(),
-    }
+    # Use full environment copy to ensure Claude Code authentication works
+    # This matches the approach in agent.py and test_claude_max.py which work correctly
+    env = os.environ.copy()
 
-    # Add GH_TOKEN as alias for GITHUB_PAT if it exists
-    github_pat = os.getenv("GITHUB_PAT")
-    if github_pat:
-        safe_env_vars["GH_TOKEN"] = github_pat
+    # Ensure critical ADW-specific variables are set from .env if available
+    if os.getenv("GITHUB_REPO_URL"):
+        env["GITHUB_REPO_URL"] = os.getenv("GITHUB_REPO_URL")
+    if os.getenv("GITHUB_PAT"):
+        env["GITHUB_PAT"] = os.getenv("GITHUB_PAT")
+        env["GH_TOKEN"] = os.getenv("GITHUB_PAT")  # Alias for GitHub CLI
+    if os.getenv("CLAUDE_CODE_PATH"):
+        env["CLAUDE_CODE_PATH"] = os.getenv("CLAUDE_CODE_PATH")
+    if os.getenv("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"):
+        env["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"] = os.getenv("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR")
 
-    # Filter out None values
-    return {k: v for k, v in safe_env_vars.items() if v is not None}
+    # Set Python unbuffered for better subprocess output
+    env["PYTHONUNBUFFERED"] = "1"
+
+    return env
