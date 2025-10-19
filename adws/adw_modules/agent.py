@@ -220,23 +220,61 @@ def parse_jsonl_output(
     logger.info(f"[agent.py] Parsing JSONL output: {output_file}")
     try:
         with open(output_file, "r", encoding="utf-8") as f:
-            # Read all lines and parse each as JSON
-            messages = [json.loads(line) for line in f if line.strip()]
+            content = f.read()
 
-            logger.info(f"[agent.py] Found {len(messages)} messages in JSONL output")
+        # Check if file is empty
+        if not content.strip():
+            logger.error(f"[agent.py] ERROR: Output file is empty")
+            return [], None
 
-            # Find the result message (should be the last one)
-            result_message = None
-            for message in reversed(messages):
-                if message.get("type") == "result":
-                    result_message = message
-                    logger.debug(f"[agent.py] Found result message: is_error={result_message.get('is_error')}, subtype={result_message.get('subtype')}")
-                    break
+        # Try to parse as JSONL (one JSON object per line)
+        messages = []
+        lines = content.strip().split('\n')
 
-            if not result_message:
-                logger.warning(f"[agent.py] WARNING: No result message found in {len(messages)} messages")
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                # Try to parse line as JSON
+                msg = json.loads(line)
+                messages.append(msg)
+            except json.JSONDecodeError:
+                # Line is not valid JSON - might be plain text
+                pass
 
-            return messages, result_message
+        # If no JSON messages found, try extracting JSON from markdown code blocks
+        if not messages:
+            import re
+            logger.info(f"[agent.py] No JSONL messages found, trying to extract JSON from markdown")
+            json_pattern = r'```json\s*(\{.*?\})\s*```'
+            matches = re.findall(json_pattern, content, re.DOTALL)
+            if matches:
+                try:
+                    extracted_json = json.loads(matches[-1])  # Use last match
+                    result_msg = {
+                        "type": "result",
+                        "result": extracted_json,
+                        "is_error": False
+                    }
+                    messages.append(result_msg)
+                    logger.info(f"[agent.py] Extracted JSON from markdown code block: {extracted_json}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"[agent.py] ERROR: Failed to parse extracted JSON: {e}")
+
+        logger.info(f"[agent.py] Found {len(messages)} messages in JSONL output")
+
+        # Find the result message (should be the last one)
+        result_message = None
+        for message in reversed(messages):
+            if message.get("type") == "result":
+                result_message = message
+                logger.debug(f"[agent.py] Found result message: is_error={result_message.get('is_error')}, subtype={result_message.get('subtype')}")
+                break
+
+        if not result_message:
+            logger.warning(f"[agent.py] WARNING: No result message found in {len(messages)} messages")
+
+        return messages, result_message
     except Exception as e:
         logger.error(f"[agent.py] ERROR: Failed to parse JSONL output: {e}")
         return [], None
