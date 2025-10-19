@@ -13,13 +13,6 @@ from enum import Enum
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Import from utils in the same directory
-try:
-    from utils import setup_logger, get_logger
-except ImportError:
-    # Fallback if running from different context
-    from adws.adw_modules.utils import setup_logger, get_logger
-
 
 # Retry codes for Claude Code execution errors
 class RetryCode(str, Enum):
