@@ -462,13 +462,34 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    # Build command - always use stream-json format and verbose
-    cmd = [CLAUDE_PATH, "-p", request.prompt]
-    # Only add --model if specified (None = use authenticated Max Plan)
-    if request.model:
-        cmd.extend(["--model", request.model])
-    cmd.extend(["--output-format", "stream-json"])
-    cmd.append("--verbose")
+    # Determine if prompt is too large for command line (Windows limit ~8191 chars)
+    # For large prompts, save to file and reference it
+    prompt_is_large = len(request.prompt) > 2000 or '\n' in request.prompt[:500]
+
+    if prompt_is_large:
+        # Save prompt to file for reference
+        prompt_file_path = os.path.join(output_dir, "expanded_prompt.txt")
+        with open(prompt_file_path, "w", encoding="utf-8") as pf:
+            pf.write(request.prompt)
+        logger.info(f"[agent.py] Saved large prompt to file: {prompt_file_path}")
+
+        # Build command without -p flag (will use stdin)
+        cmd = [CLAUDE_PATH]
+        # Only add --model if specified (None = use authenticated Max Plan)
+        if request.model:
+            cmd.extend(["--model", request.model])
+        cmd.extend(["--output-format", "stream-json"])
+        cmd.append("--verbose")
+        use_stdin = True
+    else:
+        # Build command - always use stream-json format and verbose
+        cmd = [CLAUDE_PATH, "-p", request.prompt]
+        # Only add --model if specified (None = use authenticated Max Plan)
+        if request.model:
+            cmd.extend(["--model", request.model])
+        cmd.extend(["--output-format", "stream-json"])
+        cmd.append("--verbose")
+        use_stdin = False
 
     # Check for MCP config in working directory
     if request.working_dir:
@@ -486,6 +507,7 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
     # Log command execution for debugging
     logger.info(f"[agent.py] Executing Claude Code CLI:")
     logger.info(f"[agent.py]   Command: {' '.join(cmd)}")
+    logger.info(f"[agent.py]   Prompt length: {len(request.prompt)} chars, via {'stdin' if use_stdin else '-p flag'}")
     logger.info(f"[agent.py]   Working dir: {request.working_dir or os.getcwd()}")
     logger.info(f"[agent.py]   Output file: {request.output_file}")
     logger.info(f"[agent.py]   Model: {request.model}")
@@ -496,15 +518,35 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
         with open(request.output_file, "w") as output_f:
             # Execute Claude Code and stream output to file
             logger.info(f"[agent.py] Starting subprocess...")
-            result = subprocess.run(
-                cmd,
-                stdout=output_f,  # Stream directly to file
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-                cwd=request.working_dir,  # Use working_dir if provided
-            )
+
+            if use_stdin:
+                # Pass prompt via stdin for large prompts
+                result = subprocess.run(
+                    cmd,
+                    input=request.prompt,  # Pass prompt via stdin
+                    stdout=output_f,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    cwd=request.working_dir,
+                )
+            else:
+                # Use -p flag for small prompts
+                result = subprocess.run(
+                    cmd,
+                    stdout=output_f,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    cwd=request.working_dir,
+                )
+
             logger.info(f"[agent.py] Subprocess completed with return code: {result.returncode}")
+
+            # Log stderr if present (even on success, for debugging)
+            if result.stderr:
+                stderr_preview = result.stderr[:500] if len(result.stderr) > 500 else result.stderr
+                logger.info(f"[agent.py] Stderr output: {stderr_preview}")
 
         if result.returncode == 0:
             logger.info(f"[agent.py] Claude Code execution successful")
