@@ -105,6 +105,12 @@ def main(
     working_dir: str,
 ):
     """Run chore planning and implementation workflow."""
+    # Force UTF-8 encoding for Windows console to handle emoji characters
+    if sys.platform == "win32":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
     console = Console()
 
     # Generate a unique ID for this workflow

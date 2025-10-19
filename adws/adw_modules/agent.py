@@ -13,6 +13,13 @@ from enum import Enum
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# Import from utils in the same directory
+try:
+    from utils import setup_logger, get_logger
+except ImportError:
+    # Fallback if running from different context
+    from adws.adw_modules.utils import setup_logger, get_logger
+
 
 # Retry codes for Claude Code execution errors
 class RetryCode(str, Enum):
@@ -69,53 +76,33 @@ class ClaudeCodeResultMessage(BaseModel):
 
 
 def get_safe_subprocess_env() -> Dict[str, str]:
-    """Get filtered environment variables safe for subprocess execution.
+    """Get environment variables for subprocess execution.
 
-    Returns only the environment variables needed based on .env.sample configuration.
-    This 'max' branch uses authenticated Claude Code - no API key required.
+    For Max Plan (authenticated Claude Code), we need to pass ALL environment
+    variables so Claude Code can find its authentication credentials.
+
+    This is required for Windows authentication which uses various system paths
+    and credentials that aren't predictable.
 
     Returns:
-        Dictionary containing only required environment variables
+        Dictionary containing all environment variables
     """
-    safe_env_vars = {
-        # Anthropic Configuration (optional - uses authenticated Claude Code on max branch)
-        "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
+    # Use full environment copy to ensure Claude Code authentication works
+    # This matches the approach in test_claude_max.py which works correctly
+    env = os.environ.copy()
 
-        # GitHub Configuration (required for ADW)
-        "GITHUB_REPO_URL": os.getenv("GITHUB_REPO_URL"),
-        "GITHUB_PAT": os.getenv("GITHUB_PAT"),
+    # Ensure critical ADW-specific variables are set from .env if available
+    if os.getenv("GITHUB_REPO_URL"):
+        env["GITHUB_REPO_URL"] = os.getenv("GITHUB_REPO_URL")
+    if os.getenv("GITHUB_PAT"):
+        env["GITHUB_PAT"] = os.getenv("GITHUB_PAT")
+    if os.getenv("CLAUDE_CODE_PATH"):
+        env["CLAUDE_CODE_PATH"] = os.getenv("CLAUDE_CODE_PATH")
 
-        # Claude Code Configuration
-        "CLAUDE_CODE_PATH": os.getenv("CLAUDE_CODE_PATH", "claude"),
-        "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": os.getenv(
-            "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "true"
-        ),
+    # Set Python unbuffered for better subprocess output
+    env["PYTHONUNBUFFERED"] = "1"
 
-        # Essential system environment variables
-        "HOME": os.getenv("HOME"),
-        "USER": os.getenv("USER"),
-        "USERNAME": os.getenv("USERNAME"),  # Windows username
-        "PATH": os.getenv("PATH"),
-        "SHELL": os.getenv("SHELL"),
-        "TERM": os.getenv("TERM"),
-        "LANG": os.getenv("LANG"),
-        "LC_ALL": os.getenv("LC_ALL"),
-
-        # Windows-specific (needed for Claude Code authentication)
-        "USERPROFILE": os.getenv("USERPROFILE"),  # Windows user profile path
-        "APPDATA": os.getenv("APPDATA"),  # Application data folder
-        "LOCALAPPDATA": os.getenv("LOCALAPPDATA"),  # Local application data
-
-        # Python-specific variables that subprocesses might need
-        "PYTHONPATH": os.getenv("PYTHONPATH"),
-        "PYTHONUNBUFFERED": "1",  # Useful for subprocess output
-
-        # Working directory tracking
-        "PWD": os.getcwd(),
-    }
-
-    # Filter out None values (allows optional variables)
-    return {k: v for k, v in safe_env_vars.items() if v is not None}
+    return env
 
 
 # Load environment variables
@@ -123,6 +110,21 @@ load_dotenv()
 
 # Get Claude Code CLI path from environment
 CLAUDE_PATH = os.getenv("CLAUDE_CODE_PATH", "claude")
+
+# Initialize module-level logger
+# Use a simple console logger for the agent module
+logger = logging.getLogger("agent")
+logger.setLevel(logging.DEBUG)
+
+# Clear any existing handlers
+logger.handlers.clear()
+
+# Console handler - INFO and above to stdout
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(message)s")
+console_handler.setFormatter(console_formatter)
+logger.addHandler(console_handler)
 
 # Output file name constants (matching adw_prompt.py and adw_slash_command.py)
 OUTPUT_JSONL = "cc_raw_output.jsonl"
@@ -222,20 +224,28 @@ def parse_jsonl_output(
     Returns:
         Tuple of (all_messages, result_message) where result_message is None if not found
     """
+    logger.debug(f"[agent.py] Parsing JSONL output: {output_file}")
     try:
-        with open(output_file, "r") as f:
+        with open(output_file, "r", encoding="utf-8") as f:
             # Read all lines and parse each as JSON
             messages = [json.loads(line) for line in f if line.strip()]
+
+            logger.debug(f"[agent.py] Found {len(messages)} messages in JSONL output")
 
             # Find the result message (should be the last one)
             result_message = None
             for message in reversed(messages):
                 if message.get("type") == "result":
                     result_message = message
+                    logger.debug(f"[agent.py] Found result message: is_error={result_message.get('is_error')}, subtype={result_message.get('subtype')}")
                     break
+
+            if not result_message:
+                logger.warning(f"[agent.py] WARNING: No result message found in {len(messages)} messages")
 
             return messages, result_message
     except Exception as e:
+        logger.error(f"[agent.py] ERROR: Failed to parse JSONL output: {e}")
         return [], None
 
 
@@ -252,47 +262,56 @@ def convert_jsonl_to_json(jsonl_file: str) -> str:
     output_dir = os.path.dirname(jsonl_file)
     json_file = os.path.join(output_dir, OUTPUT_JSON)
 
+    logger.debug(f"[agent.py] Converting JSONL to JSON: {json_file}")
+
     # Parse the JSONL file
     messages, _ = parse_jsonl_output(jsonl_file)
 
     # Write as JSON array
-    with open(json_file, "w") as f:
+    with open(json_file, "w", encoding="utf-8") as f:
         json.dump(messages, f, indent=2)
+
+    logger.debug(f"[agent.py] Converted {len(messages)} messages to JSON")
 
     return json_file
 
 
 def save_last_entry_as_raw_result(json_file: str) -> Optional[str]:
     """Save the last entry from a JSON array file as cc_final_object.json.
-    
+
     Args:
         json_file: Path to the JSON array file
-        
+
     Returns:
         Path to the created cc_final_object.json file, or None if error
     """
     try:
         # Read the JSON array
-        with open(json_file, "r") as f:
+        with open(json_file, "r", encoding="utf-8") as f:
             messages = json.load(f)
-        
+
         if not messages:
+            logger.warning(f"[agent.py] WARNING: No messages to save as final object")
             return None
-            
+
         # Get the last entry
         last_entry = messages[-1]
-        
+
         # Create cc_final_object.json in the same directory
         output_dir = os.path.dirname(json_file)
         final_object_file = os.path.join(output_dir, FINAL_OBJECT_JSON)
-        
+
+        logger.debug(f"[agent.py] Saving final object to: {final_object_file}")
+
         # Write the last entry
-        with open(final_object_file, "w") as f:
+        with open(final_object_file, "w", encoding="utf-8") as f:
             json.dump(last_entry, f, indent=2)
-            
+
+        logger.debug(f"[agent.py] Saved final object (type: {last_entry.get('type')})")
+
         return final_object_file
-    except Exception:
-        # Silently fail - this is a nice-to-have feature
+    except Exception as e:
+        logger.warning(f"[agent.py] WARNING: Failed to save final object: {e}")
         return None
 
 
@@ -428,10 +447,19 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
     # Set up environment with only required variables
     env = get_claude_env()
 
+    # Log command execution for debugging
+    logger.info(f"[agent.py] Executing Claude Code CLI:")
+    logger.info(f"[agent.py]   Command: {' '.join(cmd)}")
+    logger.info(f"[agent.py]   Working dir: {request.working_dir or os.getcwd()}")
+    logger.info(f"[agent.py]   Output file: {request.output_file}")
+    logger.info(f"[agent.py]   Model: {request.model}")
+    logger.debug(f"[agent.py]   API Key Source: {'env' if env.get('ANTHROPIC_API_KEY') else 'authenticated'}")
+
     try:
         # Open output file for streaming
         with open(request.output_file, "w") as output_f:
             # Execute Claude Code and stream output to file
+            logger.info(f"[agent.py] Starting subprocess...")
             result = subprocess.run(
                 cmd,
                 stdout=output_f,  # Stream directly to file
@@ -440,6 +468,7 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                 env=env,
                 cwd=request.working_dir,  # Use working_dir if provided
             )
+            logger.info(f"[agent.py] Subprocess completed with return code: {result.returncode}")
 
         if result.returncode == 0:
 
