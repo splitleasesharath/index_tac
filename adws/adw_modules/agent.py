@@ -31,7 +31,7 @@ class AgentPromptRequest(BaseModel):
     prompt: str
     adw_id: str
     agent_name: str = "ops"
-    model: Literal["sonnet", "opus"] = "sonnet"
+    model: Optional[Literal["sonnet", "opus"]] = None  # None = use authenticated Max Plan
     dangerously_skip_permissions: bool = False
     output_file: str
     working_dir: Optional[str] = None
@@ -51,7 +51,7 @@ class AgentTemplateRequest(BaseModel):
     slash_command: str
     args: List[str]
     adw_id: str
-    model: Literal["sonnet", "opus"] = "sonnet"
+    model: Optional[Literal["sonnet", "opus"]] = None  # None = use authenticated Max Plan
     working_dir: Optional[str] = None
 
 
@@ -217,13 +217,13 @@ def parse_jsonl_output(
     Returns:
         Tuple of (all_messages, result_message) where result_message is None if not found
     """
-    logger.debug(f"[agent.py] Parsing JSONL output: {output_file}")
+    logger.info(f"[agent.py] Parsing JSONL output: {output_file}")
     try:
         with open(output_file, "r", encoding="utf-8") as f:
             # Read all lines and parse each as JSON
             messages = [json.loads(line) for line in f if line.strip()]
 
-            logger.debug(f"[agent.py] Found {len(messages)} messages in JSONL output")
+            logger.info(f"[agent.py] Found {len(messages)} messages in JSONL output")
 
             # Find the result message (should be the last one)
             result_message = None
@@ -255,7 +255,7 @@ def convert_jsonl_to_json(jsonl_file: str) -> str:
     output_dir = os.path.dirname(jsonl_file)
     json_file = os.path.join(output_dir, OUTPUT_JSON)
 
-    logger.debug(f"[agent.py] Converting JSONL to JSON: {json_file}")
+    logger.info(f"[agent.py] Converting JSONL to JSON: {json_file}")
 
     # Parse the JSONL file
     messages, _ = parse_jsonl_output(jsonl_file)
@@ -264,7 +264,7 @@ def convert_jsonl_to_json(jsonl_file: str) -> str:
     with open(json_file, "w", encoding="utf-8") as f:
         json.dump(messages, f, indent=2)
 
-    logger.debug(f"[agent.py] Converted {len(messages)} messages to JSON")
+    logger.info(f"[agent.py] Converted {len(messages)} messages to JSON")
 
     return json_file
 
@@ -294,13 +294,13 @@ def save_last_entry_as_raw_result(json_file: str) -> Optional[str]:
         output_dir = os.path.dirname(json_file)
         final_object_file = os.path.join(output_dir, FINAL_OBJECT_JSON)
 
-        logger.debug(f"[agent.py] Saving final object to: {final_object_file}")
+        logger.info(f"[agent.py] Saving final object to: {final_object_file}")
 
         # Write the last entry
         with open(final_object_file, "w", encoding="utf-8") as f:
             json.dump(last_entry, f, indent=2)
 
-        logger.debug(f"[agent.py] Saved final object (type: {last_entry.get('type')})")
+        logger.info(f"[agent.py] Saved final object (type: {last_entry.get('type')})")
 
         return final_object_file
     except Exception as e:
@@ -423,7 +423,9 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
 
     # Build command - always use stream-json format and verbose
     cmd = [CLAUDE_PATH, "-p", request.prompt]
-    cmd.extend(["--model", request.model])
+    # Only add --model if specified (None = use authenticated Max Plan)
+    if request.model:
+        cmd.extend(["--model", request.model])
     cmd.extend(["--output-format", "stream-json"])
     cmd.append("--verbose")
 
@@ -464,8 +466,10 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
             logger.info(f"[agent.py] Subprocess completed with return code: {result.returncode}")
 
         if result.returncode == 0:
+            logger.info(f"[agent.py] Claude Code execution successful")
 
             # Parse the JSONL file
+            logger.info(f"[agent.py] Parsing JSONL output...")
             messages, result_message = parse_jsonl_output(request.output_file)
 
             # Convert JSONL to JSON array file
@@ -482,9 +486,12 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                 is_error = result_message.get("is_error", False)
                 subtype = result_message.get("subtype", "")
 
+                logger.info(f"[agent.py] Result message found: is_error={is_error}, subtype={subtype}, session_id={session_id}")
+
                 # Handle error_during_execution case where there's no result field
                 if subtype == "error_during_execution":
                     error_msg = "Error during execution: Agent encountered an error and did not return a result"
+                    logger.info(f"[agent.py] Error during execution detected")
                     return AgentPromptResponse(
                         output=error_msg,
                         success=False,
@@ -506,6 +513,7 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                 )
             else:
                 # No result message found, try to extract meaningful error
+                logger.info(f"[agent.py] WARNING: No result message found in output")
                 error_msg = "No result message found in Claude Code output"
 
                 # Try to get the last few lines of output for context
@@ -542,6 +550,7 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                 )
         else:
             # Error occurred - stderr is captured, stdout went to file
+            logger.info(f"[agent.py] Claude Code execution failed with return code: {result.returncode}")
             stderr_msg = result.stderr.strip() if result.stderr else ""
 
             # Try to read the output file to check for errors in stdout
@@ -629,7 +638,7 @@ def execute_template(request: AgentTemplateRequest) -> AgentPromptResponse:
             slash_command="/implement",
             args=["plan.md"],
             adw_id="abc12345",
-            model="sonnet"  # Explicitly set model
+            # model defaults to None (uses authenticated Max Plan)
         )
         response = execute_template(request)
     """

@@ -150,7 +150,7 @@ class AgentPromptRequest(BaseModel):
     prompt: str
     adw_id: str
     agent_name: str = "ops"
-    model: Literal["sonnet", "opus"] = "sonnet"
+    model: Optional[Literal["sonnet", "opus"]] = None  # None = use authenticated Max Plan
     dangerously_skip_permissions: bool = False
     output_file: str
     working_dir: Optional[str] = None
@@ -172,7 +172,7 @@ class AgentTemplateRequest(BaseModel):
     slash_command: SlashCommand
     args: List[str]
     adw_id: str
-    model: Literal["sonnet", "opus"] = "sonnet"
+    model: Optional[Literal["sonnet", "opus"]] = None  # None = use authenticated Max Plan
     working_dir: Optional[str] = None
 
 

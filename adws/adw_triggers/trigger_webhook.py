@@ -20,6 +20,7 @@ Environment Requirements:
 import os
 import subprocess
 import sys
+import json
 from typing import Optional
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
@@ -64,8 +65,47 @@ async def github_webhook(request: Request):
         # Get event type from header
         event_type = request.headers.get("X-GitHub-Event", "")
 
-        # Parse webhook payload
-        payload = await request.json()
+        # Debug: Log headers and content type
+        content_type = request.headers.get("Content-Type", "")
+        print(f"Event type: {event_type}")
+        print(f"Content-Type: {content_type}")
+        print(f"Headers: {dict(request.headers)}")
+
+        # Parse webhook payload - handle both JSON and form-encoded
+        try:
+            # First, try to get the raw body for debugging
+            body = await request.body()
+            print(f"Raw body length: {len(body)} bytes")
+
+            if len(body) == 0:
+                raise ValueError("Empty request body")
+
+            # GitHub can send webhooks as either JSON or form-encoded
+            if content_type == "application/json":
+                # Parse as JSON directly
+                print("Parsing as JSON")
+                payload = json.loads(body)
+            elif content_type == "application/x-www-form-urlencoded":
+                # GitHub sends the JSON in a 'payload' form field
+                print("Parsing as form-encoded (payload field)")
+                from urllib.parse import parse_qs
+                form_data = parse_qs(body.decode('utf-8'))
+                if 'payload' not in form_data:
+                    raise ValueError("No 'payload' field in form data")
+                payload = json.loads(form_data['payload'][0])
+            else:
+                raise ValueError(f"Unsupported content type: {content_type}")
+
+            print(f"Successfully parsed payload with action: {payload.get('action', 'N/A')}")
+
+        except Exception as json_error:
+            print(f"Received webhook with invalid/empty JSON body: {json_error}")
+            # GitHub ping events or other non-JSON requests are okay
+            if event_type == "ping":
+                print("Received GitHub ping event - webhook is configured correctly")
+                return {"status": "ok", "message": "pong"}
+            # For other events without valid JSON, return success to prevent retries
+            return {"status": "ignored", "reason": "No valid JSON payload"}
 
         # Extract event details
         action = payload.get("action", "")

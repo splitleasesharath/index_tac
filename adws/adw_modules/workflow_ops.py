@@ -63,12 +63,17 @@ def extract_adw_info(text: str, temp_adw_id: str) -> ADWExtractionResult:
     """Extract ADW workflow, ID, and model_set from text using classify_adw agent.
     Returns ADWExtractionResult with workflow_command, adw_id, and model_set."""
 
+    # Get project root directory (where .claude/commands/ is located)
+    # __file__ is in adws/adw_modules/, so go up 2 levels to get to project root
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
     # Use classify_adw to extract structured info
     request = AgentTemplateRequest(
         agent_name="adw_classifier",
         slash_command="/classify_adw",
         args=[text],
         adw_id=temp_adw_id,
+        working_dir=project_root,  # Set working directory to project root
     )
 
     try:
