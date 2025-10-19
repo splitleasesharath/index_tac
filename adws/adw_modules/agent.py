@@ -237,12 +237,15 @@ def parse_jsonl_output(
             try:
                 # Try to parse line as JSON
                 msg = json.loads(line)
-                messages.append(msg)
+                # Validate that this looks like a Claude Code message (must have "type" field)
+                # Otherwise it might be plain JSON from a markdown block
+                if isinstance(msg, dict) and "type" in msg:
+                    messages.append(msg)
             except json.JSONDecodeError:
                 # Line is not valid JSON - might be plain text
                 pass
 
-        # If no JSON messages found, try extracting JSON from markdown code blocks
+        # If no valid Claude Code messages found, try extracting JSON from markdown code blocks
         if not messages:
             import re
             logger.info(f"[agent.py] No JSONL messages found, trying to extract JSON from markdown")
