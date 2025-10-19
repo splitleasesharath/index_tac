@@ -540,7 +540,15 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
                         retry_code=RetryCode.ERROR_DURING_EXECUTION,
                     )
 
-                result_text = result_message.get("result", "")
+                result_value = result_message.get("result", "")
+
+                # Convert result to string if it's a dict/list
+                if isinstance(result_value, (dict, list)):
+                    result_text = json.dumps(result_value, indent=2)
+                elif isinstance(result_value, str):
+                    result_text = result_value
+                else:
+                    result_text = str(result_value)
 
                 # For error cases, truncate the output to prevent JSONL blobs
                 if is_error and len(result_text) > 1000:
@@ -684,14 +692,32 @@ def execute_template(request: AgentTemplateRequest) -> AgentPromptResponse:
         response = execute_template(request)
     """
 
-    # Construct prompt from slash command and args
-    prompt = f"{request.slash_command} {' '.join(request.args)}"
-
-    # Create output directory with adw_id at project root
-    # __file__ is in adws/adw_modules/, so we need to go up 3 levels to get to project root
+    # Get project root
     project_root = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
+
+    # Load and expand the template
+    # Slash command "/classify_adw" -> ".claude/commands/classify_adw.md"
+    command_name = request.slash_command.lstrip('/')
+    template_path = os.path.join(project_root, ".claude", "commands", f"{command_name}.md")
+
+    # Check if template exists
+    if os.path.exists(template_path):
+        logger.info(f"[agent.py] Loading template from: {template_path}")
+        with open(template_path, 'r', encoding='utf-8') as f:
+            template_content = f.read()
+
+        # Replace $ARGUMENTS with the provided args
+        args_text = ' '.join(request.args)
+        prompt = template_content.replace('$ARGUMENTS', args_text)
+        logger.info(f"[agent.py] Expanded template with args: {args_text[:100]}...")
+    else:
+        # Fallback to old behavior if template not found
+        logger.warning(f"[agent.py] Template not found: {template_path}, using fallback")
+        prompt = f"{request.slash_command} {' '.join(request.args)}"
+
+    # Create output directory with adw_id at project root
     output_dir = os.path.join(
         project_root, "agents", request.adw_id, request.agent_name
     )
