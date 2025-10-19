@@ -129,11 +129,7 @@ def make_issue_comment(issue_id: str, comment: str) -> None:
     github_repo_url = get_repo_url()
     repo_path = extract_repo_path(github_repo_url)
 
-    # Ensure comment has ADW_BOT_IDENTIFIER to prevent webhook loops
-    if not comment.startswith(ADW_BOT_IDENTIFIER):
-        comment = f"{ADW_BOT_IDENTIFIER} {comment}"
-
-    # Build command
+    # Build command - no longer adding ADW_BOT_IDENTIFIER prefix
     cmd = [
         "gh",
         "issue",
@@ -149,7 +145,9 @@ def make_issue_comment(issue_id: str, comment: str) -> None:
     env = get_github_env()
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        # If we have a PAT in env, pass None to let subprocess inherit environment
+        # The gh CLI needs access to system environment for auth
+        result = subprocess.run(cmd, capture_output=True, text=True, env=None)
 
         if result.returncode == 0:
             print(f"Successfully posted comment to issue #{issue_id}")

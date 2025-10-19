@@ -6,6 +6,8 @@
 #   "python-dotenv",
 #   "click",
 #   "rich",
+#   "pyyaml",
+#   "requests",
 # ]
 # ///
 """
@@ -44,21 +46,47 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.rule import Rule
 
-# Add the adw_modules directory to the path so we can import agent
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "adw_modules"))
+# Add the adws directory to the path so we can import as a package
+sys.path.insert(0, os.path.dirname(__file__))
 
-from agent import (
+from adw_modules.agent import (
     AgentTemplateRequest,
     AgentPromptResponse,
     execute_template,
     generate_short_id,
 )
+from adw_modules.event_manager import event_manager
 
 # Output file name constants
 OUTPUT_JSONL = "cc_raw_output.jsonl"
 OUTPUT_JSON = "cc_raw_output.json"
 FINAL_OBJECT_JSON = "cc_final_object.json"
 SUMMARY_JSON = "custom_summary_output.json"
+
+
+def emit_event(event_type: str, data: dict, adw_id: str, issue_number: str = None):
+    """Emit event to notification system if issue_number is provided.
+
+    Args:
+        event_type: Event type from taxonomy
+        data: Event-specific data
+        adw_id: ADW workflow ID
+        issue_number: GitHub issue number (optional)
+    """
+    if not issue_number:
+        return  # Skip notification if no issue number
+
+    context = {
+        "workflow": "adw_chore_implement",
+        "adw_id": adw_id,
+        "issue_number": issue_number
+    }
+
+    try:
+        event_manager.emit(event_type, data, context)
+    except Exception as e:
+        # Don't fail workflow if notification fails
+        print(f"Warning: Failed to emit event {event_type}: {e}", file=sys.stderr)
 
 
 def extract_plan_path(output: str) -> str:
@@ -99,10 +127,22 @@ def extract_plan_path(output: str) -> str:
     type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     help="Working directory for command execution (default: current directory)",
 )
+@click.option(
+    "--adw-id",
+    type=str,
+    help="Use existing ADW ID instead of generating a new one",
+)
+@click.option(
+    "--issue-number",
+    type=str,
+    help="GitHub issue number (for tracking purposes)",
+)
 def main(
     prompt: str,
     model: str,
     working_dir: str,
+    adw_id: str,
+    issue_number: str,
 ):
     """Run chore planning and implementation workflow."""
     # Force UTF-8 encoding for Windows console to handle emoji characters
@@ -113,8 +153,9 @@ def main(
 
     console = Console()
 
-    # Generate a unique ID for this workflow
-    adw_id = generate_short_id()
+    # Use provided ADW ID or generate a new one
+    if not adw_id:
+        adw_id = generate_short_id()
 
     # Use current directory if no working directory specified
     if not working_dir:
@@ -135,6 +176,9 @@ def main(
         )
     )
     console.print()
+
+    # Emit workflow start event
+    emit_event("workflow.started", {"workflow_stage": "chore_implement"}, adw_id, issue_number)
 
     # Phase 1: Run /chore command
     console.print(Rule("[bold yellow]Phase 1: Planning (/chore)[/bold yellow]"))
@@ -174,12 +218,18 @@ def main(
     plan_path = None
 
     try:
+        # Emit planning start event
+        emit_event("workflow.started", {"workflow_stage": "planning"}, adw_id, issue_number)
+
         # Execute the chore command
         with console.status("[bold yellow]Creating plan...[/bold yellow]"):
             chore_response = execute_template(chore_request)
 
         # Display the chore result
         if chore_response.success:
+            # Emit planning success event
+            emit_event("workflow.completed", {"workflow_stage": "planning"}, adw_id, issue_number)
+
             # Success panel
             console.print(
                 Panel(
@@ -206,6 +256,9 @@ def main(
                 sys.exit(3)
 
         else:
+            # Emit planning failure event
+            emit_event("workflow.error", {"error_message": "Planning phase failed"}, adw_id, issue_number)
+
             # Error panel
             console.print(
                 Panel(
@@ -224,25 +277,25 @@ def main(
         chore_output_dir = f"./agents/{adw_id}/{planner_name}"
         chore_summary_path = f"{chore_output_dir}/{SUMMARY_JSON}"
 
+        summary_data = {
+            "phase": "planning",
+            "adw_id": adw_id,
+            "slash_command": "/chore",
+            "args": [adw_id, prompt],
+            "path_to_slash_command_prompt": ".claude/commands/chore.md",
+            "model": model,
+            "working_dir": working_dir,
+            "success": chore_response.success,
+            "session_id": chore_response.session_id,
+            "retry_code": chore_response.retry_code,
+            "output": chore_response.output,
+            "plan_path": plan_path,
+        }
+        if issue_number:
+            summary_data["issue_number"] = issue_number
+
         with open(chore_summary_path, "w") as f:
-            json.dump(
-                {
-                    "phase": "planning",
-                    "adw_id": adw_id,
-                    "slash_command": "/chore",
-                    "args": [adw_id, prompt],
-                    "path_to_slash_command_prompt": ".claude/commands/chore.md",
-                    "model": model,
-                    "working_dir": working_dir,
-                    "success": chore_response.success,
-                    "session_id": chore_response.session_id,
-                    "retry_code": chore_response.retry_code,
-                    "output": chore_response.output,
-                    "plan_path": plan_path,
-                },
-                f,
-                indent=2,
-            )
+            json.dump(summary_data, f, indent=2)
 
         # Show chore output files
         console.print()
@@ -321,12 +374,18 @@ def main(
         )
         console.print()
 
+        # Emit implementation start event
+        emit_event("workflow.started", {"workflow_stage": "implementation"}, adw_id, issue_number)
+
         # Execute the implement command
         with console.status("[bold yellow]Implementing plan...[/bold yellow]"):
             implement_response = execute_template(implement_request)
 
         # Display the implement result
         if implement_response.success:
+            # Emit implementation success event
+            emit_event("workflow.completed", {"workflow_stage": "implementation"}, adw_id, issue_number)
+
             # Success panel
             console.print(
                 Panel(
@@ -342,6 +401,9 @@ def main(
                     f"\n[bold cyan]Session ID:[/bold cyan] {implement_response.session_id}"
                 )
         else:
+            # Emit implementation failure event
+            emit_event("workflow.error", {"error_message": "Implementation phase failed"}, adw_id, issue_number)
+
             # Error panel
             console.print(
                 Panel(
@@ -356,24 +418,24 @@ def main(
         implement_output_dir = f"./agents/{adw_id}/{builder_name}"
         implement_summary_path = f"{implement_output_dir}/{SUMMARY_JSON}"
 
+        implement_summary_data = {
+            "phase": "implementation",
+            "adw_id": adw_id,
+            "slash_command": "/implement",
+            "args": [plan_path],
+            "path_to_slash_command_prompt": ".claude/commands/implement.md",
+            "model": model,
+            "working_dir": working_dir,
+            "success": implement_response.success,
+            "session_id": implement_response.session_id,
+            "retry_code": implement_response.retry_code,
+            "output": implement_response.output,
+        }
+        if issue_number:
+            implement_summary_data["issue_number"] = issue_number
+
         with open(implement_summary_path, "w") as f:
-            json.dump(
-                {
-                    "phase": "implementation",
-                    "adw_id": adw_id,
-                    "slash_command": "/implement",
-                    "args": [plan_path],
-                    "path_to_slash_command_prompt": ".claude/commands/implement.md",
-                    "model": model,
-                    "working_dir": working_dir,
-                    "success": implement_response.success,
-                    "session_id": implement_response.session_id,
-                    "retry_code": implement_response.retry_code,
-                    "output": implement_response.output,
-                },
-                f,
-                indent=2,
-            )
+            json.dump(implement_summary_data, f, indent=2)
 
         # Show implement output files
         console.print()
@@ -445,35 +507,35 @@ def main(
         workflow_summary_path = f"./agents/{adw_id}/workflow_summary.json"
         os.makedirs(f"./agents/{adw_id}", exist_ok=True)
 
-        with open(workflow_summary_path, "w") as f:
-            json.dump(
-                {
-                    "workflow": "chore_implement",
-                    "adw_id": adw_id,
-                    "prompt": prompt,
-                    "model": model,
-                    "working_dir": working_dir,
-                    "plan_path": plan_path,
-                    "phases": {
-                        "planning": {
-                            "success": chore_response.success,
-                            "session_id": chore_response.session_id,
-                            "agent": planner_name,
-                            "output_dir": f"./agents/{adw_id}/{planner_name}/",
-                        },
-                        "implementation": {
-                            "success": implement_response.success,
-                            "session_id": implement_response.session_id,
-                            "agent": builder_name,
-                            "output_dir": f"./agents/{adw_id}/{builder_name}/",
-                        },
-                    },
-                    "overall_success": chore_response.success
-                    and implement_response.success,
+        workflow_summary_data = {
+            "workflow": "chore_implement",
+            "adw_id": adw_id,
+            "prompt": prompt,
+            "model": model,
+            "working_dir": working_dir,
+            "plan_path": plan_path,
+            "phases": {
+                "planning": {
+                    "success": chore_response.success,
+                    "session_id": chore_response.session_id,
+                    "agent": planner_name,
+                    "output_dir": f"./agents/{adw_id}/{planner_name}/",
                 },
-                f,
-                indent=2,
-            )
+                "implementation": {
+                    "success": implement_response.success,
+                    "session_id": implement_response.session_id,
+                    "agent": builder_name,
+                    "output_dir": f"./agents/{adw_id}/{builder_name}/",
+                },
+            },
+            "overall_success": chore_response.success
+            and implement_response.success,
+        }
+        if issue_number:
+            workflow_summary_data["issue_number"] = issue_number
+
+        with open(workflow_summary_path, "w") as f:
+            json.dump(workflow_summary_data, f, indent=2)
 
         console.print(
             f"\n[bold cyan]Workflow summary:[/bold cyan] {workflow_summary_path}"
@@ -482,17 +544,26 @@ def main(
 
         # Exit with appropriate code
         if chore_response.success and implement_response.success:
+            # Emit overall success event
+            emit_event("workflow.completed", {"workflow_stage": "chore_implement"}, adw_id, issue_number)
+
             console.print(
                 "[bold green]✅ Workflow completed successfully![/bold green]"
             )
             sys.exit(0)
         else:
+            # Emit overall failure event
+            emit_event("workflow.error", {"error_message": "Workflow completed with errors"}, adw_id, issue_number)
+
             console.print(
                 "[bold yellow]⚠️  Workflow completed with errors[/bold yellow]"
             )
             sys.exit(1)
 
     except Exception as e:
+        # Emit unexpected error event
+        emit_event("workflow.error", {"error_message": f"Unexpected error: {str(e)}"}, adw_id, issue_number)
+
         console.print(
             Panel(
                 f"[bold red]{str(e)}[/bold red]",
